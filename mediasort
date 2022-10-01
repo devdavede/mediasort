@@ -1,0 +1,147 @@
+#!/bin/sh
+
+video_target="/Volumes/Videos/Videos"
+foto_target="/Volumes/Extern01/Fotos"
+sources=("/Volumes/Untitled/MP_ROOT" "/Volumes/GoPro/DCIM/100GOPRO" "/Volumes/Untitled/DCIM/100MSDCF" "/Volumes/Untitled/private/AVCHD/BDMV/STREAM")
+video_extensions=("mp4" "mov" "flac" "webm" "mkv" "flv" "vob" "ogv" "ogg" "drc" "gif" "gifv" "mng" "avi" "mts" "m2ts" "ts" "mov" "qt" "wmv" "yuv" "rm" "rmvb" "viv" "asf" "amv" "mp4" "m4p" "m4v" "mpg" "mp2" "mpeg" "mpe" "mpv" "m2v" "m4v" "svi" "3gp" "3g2" "mxf" "roq" "nsv" "f4v" "f4p" "f4a" "f4b" "wav")
+foto_extensions=("jpg" "heic" "arw" "raw" "crw" "jpeg")
+total_errors=0
+
+docopy()
+{
+  path=$1
+  log INFO "Copy from path: '$path'"
+  num_files=`ls -1q "$path" | wc -l`
+  filecount=0
+  err_count=0
+
+  for file in $path/*; do
+      filecount=$((filecount+1))
+      log INFO "File/Folder #$filecount of $num_files"
+
+      if [[ -d ${file} ]]; then
+        log INFO "$file is Directory. Check it's subdirectories."
+        docopy "$file"
+      elif [ ! -f "$file" ]; then
+          log INFO "$file does not contain any files. Next."
+          continue
+      fi
+
+      original_file_datetime=`stat -f "%Sm" -t "%Y-%m-%d-%H-%M-%S" "$file"`
+      original_file_name=$(basename ${file})
+      original_file_extension="${original_file_name##*.}"
+
+      GetPathByExtension "$original_file_extension"
+
+      if [ "$filetype_path" = "UNKNOWN" ]; then
+        log ERR "$original_file_extension is not a valid format. Continue with next file"
+        continue
+      elif [ ! -d "$filetype_path" ]; then
+        log ERR "Target path '$filetype_path' unavailable"
+        err_count=$((err_count+1))
+        continue
+      fi
+
+      target_folder_name=`stat -f "%Sm" -t "%Y-%m-%d" "$file"`
+      target_path="$filetype_path/${target_folder_name}"
+      target_file="$target_path/$original_file_name"
+
+      log INFO "Source: ${file}"
+      log INFO "Destination: ${target_path}"
+      log INFO "Copying..."
+      
+      if [ -f "$file" ] && [ -f "$target_path" ]; then
+        md5SrcFile=$(md5 -q "$file")
+        md5DstFile=$(md5 -q "$target_file")
+        if [ "$md5SrcFile" == "$md5DstFile" ]; then
+          log WARN "The file ${target_path} already exists with MD5 Matching. Skip?"
+          read -p "Y to Skip, C to Continue " skip
+          if [ "$skip" == "Y"]; then
+            continue
+          fi
+        fi 
+      fi
+
+      mkdir -p "${target_path}"
+      md5SrcFile=$(md5 -q "$file")
+      rsync -ct ${file} ${target_path}
+      md5DstFile=$(md5 -q "$target_file")
+
+      if [ "$md5SrcFile" == "$md5DstFile" ] && [ "$md5SrcFile" != "" ] && [ "$md5DstFile" != "" ];
+      then
+        rm ${file}
+      else
+        log INFO "ERROR: MD5 MISMATCH"
+        exit
+      fi
+
+      renamed_file="$target_path/$original_file_datetime.$original_file_extension"
+      incrementor=0
+      while [ -f "$renamed_file" ]; do
+        incrementor=$((incrementor+1))
+        renamed_file="$target_path/$original_file_datetime.$incrementor.$original_file_extension"
+      done
+
+        mv $target_file $renamed_file
+
+      log IFNO "File Done"
+    done
+
+    log INFO "Finished with $err_count errors"
+}
+
+GetPathByExtension()
+{
+  extension=`echo "$1" | dd  conv=lcase 2> /dev/null`
+  if [[ " ${video_extensions[*]} " =~ " ${extension} " ]]; then
+    filetype_path="$video_target"  
+  elif [[ " ${foto_extensions[*]} " =~ " ${extension} " ]]; then
+    filetype_path="$foto_target"  
+  else
+    filetype_path="UNKNOWN"
+  fi
+}
+
+log()
+{
+  [ "$1" = "ERR" ] && echo "\033[0;31m$2\033[0m" && err_count=$((err_count+1)) && total_errors=$((total_errors+1))
+  [ "$1" = "WARN" ] && echo "\033[0;31m$2\033[0m"
+  [ "$1" = "SUCCESS" ] && echo "\033[0;32m$2\033[0m"
+  [ "$1" = "INFO" ] && echo "$2"
+}
+
+scandefault()
+{
+  log INFO "Scanning default folders."
+  for i in "${sources[@]}"; do
+    if [ -d "$i" ]; then
+      docopy "$i"
+    fi
+  done
+}
+
+scanindividual()
+{
+  read -p "Do you want to copy files from an individual path? Press Y or N: " tmp
+
+  if [ "$tmp" = "Y" ]; then
+    read -p "Enter Source path: " src
+    if [ -d "$src" ]; then
+      docopy "$src"
+    else
+      log ERR "Path $src does not exist. Aborted."
+      total_errors=$((total_errors+1))
+    fi
+  fi
+}
+
+scandefault
+scanindividual
+
+hasErrors=$false
+[ "$total_errors" -gt 0 ] && hasErrors=$true || hasErrors=$false
+if [[ $hasErrors -eq $true ]]; then
+  log ERR "==========================\r\nFinished with errors\r\nTotal Errors: $total_errors\r\n=========================="
+else
+  log SUCCESS "==========================\r\nFinished without errors\r\n=========================="
+fi
